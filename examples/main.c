@@ -63,6 +63,7 @@
 #define ADC_VREF 3.3
 #define ADC_RANGE (1 << 12)
 #define ADC_CONVERT (ADC_VREF / (ADC_RANGE - 1))
+#define ADC_CLK_VAL  2999
 
 /**
   * ----------------------------------------------------------------------------------------------------
@@ -74,7 +75,7 @@
 static wiz_NetInfo g_net_info =
     {
         .mac = {0x00, 0x08, 0xDC, 0x12, 0x34, 0x68}, // MAC address
-        .ip = {192, 168, 0, 125},                     // IP address
+        .ip = {192, 168, 15, 125},                     // IP address
         .sn = {255, 255, 255, 0},                    // Subnet Mask
         .gw = {192, 168, 0, 1},                     // Gateway
         .dns = {8, 8, 8, 8},                         // DNS server
@@ -127,57 +128,8 @@ static void repeating_timer_callback(void);
 uint16_t TCP_Server(uint8_t sn, uint16_t port);
 uint16_t TCP_client(uint8_t sn, uint8_t* destip, uint16_t destport);
 
-//TCP_S_RSV_DATA *TCP_S_Recv(uint8_t sn);
-//uint8_t *TCP_S_Recv(uint8_t sn);
 uint8_t *TCP_S_Recv(uint8_t sn, uint16_t *rcv_size);
 int32_t udps_status(uint8_t sn, uint8_t* buf, uint16_t port);
-
-
-void core1_entry() {
-    uint16_t adc_raw = 0;
-    
-    adc_init();
-    adc_gpio_init( ADC_PIN);
-    adc_select_input( ADC_NUM);
-    //sleep_ms(1000);
-    
-    //adc fifo 
-    
-    adc_fifo_setup(
-        true,    // Write each completed conversion to the sample FIFO
-        true,    // Enable DMA data request (DREQ)
-        1,       // DREQ (and IRQ) asserted when at least 1 sample present
-        true,   // We won't see the ERR bit because of 8 bit reads; disable.
-        false     // Shift each sample to 8 bits when pushing to FIFO
-    );
-    //adc_set_clkdiv(999);  // (1+999)/48Mhz = 48kS/s
-    
-    printf("Starting capture\n");
-    adc_run(true);
-    while(1)
-    {
-        if(adc_data.sendStatus == 0)
-        {
-            if(adc_data.dataCount >= 2048)
-            {
-                if(adc_data.sendComplete == 1)
-                {
-                    adc_data.inputPosition =  adc_data.inputPosition == 0 ? 1 : 0;
-                    adc_data.dataCount = 0;
-                }
-                //else
-                //    continue;
-                
-            }
-            adc_raw = adc_fifo_get_blocking();
-            adc_data.DATA[adc_data.inputPosition][adc_data.dataCount++] = (adc_raw >> 8) & 0x00ff;
-            adc_data.DATA[adc_data.inputPosition][adc_data.dataCount++] = adc_raw & 0x00ff;
-            printf("%d r:%04x \r\n", adc_data.dataCount, adc_raw);
-            
-        }
-    }
-}
-
 
 /**
   * ----------------------------------------------------------------------------------------------------
@@ -205,6 +157,7 @@ int main()
     uint8_t *tcp_c_rcv_data = 0;
     uint16_t tcp_c_rcv_size = 0;
     int tcp_c_ret = 0;
+    uint16_t udp_send_port = 30001;
 
     //int8_t mic_Data[2048];
     int8_t mic_Data[200000];
@@ -236,7 +189,7 @@ int main()
     bi_decl(bi_program_description("Analog microphone example for Raspberry Pi Pico")); // for picotool
     bi_decl(bi_1pin_with_name(ADC_PIN, "ADC input pin"));
     sleep_ms(1000);
-    printf("Starting Program\n");
+    //printf("Starting Program\n");
 #if 1
     adc_init();
     adc_gpio_init( ADC_PIN);
@@ -252,9 +205,9 @@ int main()
         true,   // We won't see the ERR bit because of 8 bit reads; disable.
         false     // Shift each sample to 8 bits when pushing to FIFO
     );
-    adc_set_clkdiv(1087);// (1+999)/48Mhz = 48kS/s   199=240kS/s  239=200kS/s 1087=44118S/s
+    adc_set_clkdiv(ADC_CLK_VAL);//2999= 16kS/s 1499 = 32kS/s (1+999)/48Mhz = 48kS/s   199=240kS/s  239=200kS/s 1087=44118S/s
     sleep_ms(1000);
-    printf("Starting capture\n");
+    printf("Starting capture %d\n", 48000000/(1+ADC_CLK_VAL));
     adc_run(true);
     #endif
     //multicore_launch_core1(core1_entry);
@@ -319,73 +272,21 @@ int main()
         #if 1
         if(data_send_status == 1)
         {
-            #if 0
-            for(i= 0; i<736; i++)
-            {
-                adc_raw = adc_fifo_get_blocking();
-                //adc_raw = adc_read();
-                adc_raw1 = (adc_raw&0x0fff) - (1<<10); 
-                mic_Data[mic_cnt++] = adc_raw1 & 0x00ff;
-                mic_Data[mic_cnt++] = (adc_raw1 >> 8) & 0x00ff;
-                #if 0
-                adc_raw11.fdata = adc_raw * ADC_CONVERT;
-                mic_Data[mic_cnt++] = (adc_raw11.hdata >> 8) & 0x00ff;
-                mic_Data[mic_cnt++] = adc_raw11.hdata & 0x00ff;
-                #endif
-            }
-            sendto(UDP_SOCKET, mic_Data, mic_cnt, UDP_BroadIP, UDP_SPORT);
-            //printf("send %d\r\n", mic_cnt);
-            //printf("0x%04x | 0x%08x %.2f 0x%08x %.2f | %02x %02x | %02x %02x | %02x %02x| \r\n",adc_raw ,adc_raw*ADC_CONVERT, adc_raw*ADC_CONVERT, adc_raw11.hdata, adc_raw11.fdata, mic_Data[0]&0x00ff, mic_Data[1]&0x00ff ,mic_Data[2]&0x00ff, mic_Data[3]&0x00ff, mic_Data[4]&0x00ff, mic_Data[5]&0x00ff);
-            //printf("0x%04x  0x%04x | %02x %02x | %02x %02x | %02x %02x| \r\n", adc_raw, adc_raw1, mic_Data[0]&0x00ff, mic_Data[1]&0x00ff ,mic_Data[2]&0x00ff, mic_Data[3]&0x00ff, mic_Data[4]&0x00ff, mic_Data[5]&0x00ff);
-            mic_cnt = 0;
-            send_count++;
-            #else
-            /*
-            adc_raw = adc_fifo_get_blocking();
-            //adc_raw = adc_read();
-            adc_raw1 = (adc_raw&0x0fff) - (1<<10);
-            mic_Data[mic_cnt++] = adc_raw1 & 0x00ff;
-            mic_Data[mic_cnt++] = (adc_raw1 >> 8) & 0x00ff;
-            sendto(UDP_SOCKET, mic_Data, 2, UDP_BroadIP, UDP_SPORT);
-            send_count++;
-            mic_cnt = 0;
-            */
-            
             for(i= 0; i<250; i++)
             {
                 adc_raw = adc_fifo_get_blocking();
-                //adc_raw = adc_read();
                 adc_raw1 = (adc_raw&0x0fff) - (1<<10);
                 mic_Data[mic_cnt++] = adc_raw1 & 0x00ff;
                 mic_Data[mic_cnt++] = (adc_raw1 >> 8) & 0x00ff;
-                #if 0
-                adc_raw11.fdata = adc_raw * ADC_CONVERT;
-                mic_Data[mic_cnt++] = (adc_raw11.hdata >> 8) & 0x00ff;
-                mic_Data[mic_cnt++] = adc_raw11.hdata & 0x00ff;
-                #endif
             }
-            //sendto(UDP_SOCKET, mic_Data, mic_cnt, UDP_BroadIP, UDP_SPORT);
-            //printf("send %d\r\n", mic_cnt);
-            //printf("0x%04x | 0x%08x %.2f 0x%08x %.2f | %02x %02x | %02x %02x | %02x %02x| \r\n",adc_raw ,adc_raw*ADC_CONVERT, adc_raw*ADC_CONVERT, adc_raw11.hdata, adc_raw11.fdata, mic_Data[0]&0x00ff, mic_Data[1]&0x00ff ,mic_Data[2]&0x00ff, mic_Data[3]&0x00ff, mic_Data[4]&0x00ff, mic_Data[5]&0x00ff);
-            //printf("0x%04x  0x%04x | %02x %02x | %02x %02x | %02x %02x| \r\n", adc_raw, adc_raw1, mic_Data[0]&0x00ff, mic_Data[1]&0x00ff ,mic_Data[2]&0x00ff, mic_Data[3]&0x00ff, mic_Data[4]&0x00ff, mic_Data[5]&0x00ff);
             mic_cnt = 0;
             send_count++;
-            sendto(UDP_SOCKET, mic_Data, 500, UDP_BroadIP, UDP_SPORT);
-            /*
-            for(i=0; i<1; i++)
-            {
-                //printf("cnt = %d , %d\r\n",i, i*1472);
-                sendto(UDP_SOCKET, mic_Data+(i * 1472), 1472, UDP_BroadIP, UDP_SPORT);
-            }*/
-            //printf("send = %d \r\n",send_count);
-            #endif
-            
-            
+            sendto(UDP_SOCKET, mic_Data, 500, UDP_BroadIP, udp_send_port);
         }
         
         if(send_count >= 2000)  
         {
-            UDP_ret = sendto(UDP_SOCKET, "STOP", 5, UDP_BroadIP, UDP_SPORT);
+            UDP_ret = sendto(UDP_SOCKET, "STOP", 5, UDP_BroadIP, udp_send_port);
             printf("send finish %d\r\n", send_count);
             data_send_status = 0;
             send_count = 0;
@@ -398,38 +299,6 @@ int main()
         //TCP_C_status =TCP_client(TCP_C_SOCKET, TCP_Client_DestIp, TCP_Client_Port);
         UDP_S_status = udps_status(UDP_SOCKET, UDP_buff, UDP_PORT);
         TCP_S_status = TCP_Server(TCP_S_SOCKET, TCP_S_PORT);
-        #if 0
-        if(TCP_C_status == 17)
-        {
-            tcp_c_rcv_data = TCP_S_Recv(TCP_C_SOCKET, &tcp_c_rcv_size);
-            if(tcp_c_rcv_data != 0)
-            {
-                printf("rcv[%d] : %s \r\n",tcp_c_rcv_size, tcp_c_rcv_data);
-                tcp_c_ret = send(TCP_C_SOCKET, tcp_c_rcv_data, tcp_c_rcv_size); // Data send process (User's buffer -> Destination through H/W Tx socket buffer)
-				if(tcp_c_ret < 0) // Send Error occurred (sent data length < 0)
-				{
-					close(TCP_C_SOCKET); // socket close
-					printf("TCP Client Sedn message Error !! \r\n");
-				}
-                
-                if(strncmp(tcp_c_rcv_data, "ready", 5) == 0)
-                {
-                    printf("client data recv ready\r\n");
-                    data_send_status = 1;
-                }
-                if(data_send_status ==1)
-                {
-                    if(mic_cnt > 191999)
-                    {
-                        data_send_status = 0;
-                        tcp_c_ret = send(TCP_C_SOCKET, mic_Data, mic_cnt);
-                        printf("client data send complite %d\r\n", tcp_c_ret);
-                    }
-                }
-                free(tcp_c_rcv_data);
-            }
-        }
-        #endif
         if(TCP_S_status == 17)
         {
             //TCP_Server_Buf = TCP_S_Recv(TCP_S_SOCKET);
@@ -448,7 +317,9 @@ int main()
                 }
                 if(strncmp(tcp_rcv_data, "start", 5) == 0)
                 {
-                    printf(" data  send start\r\n");
+                    printf(" data  send start[%s]\r\n", tcp_rcv_data + 6);
+                    udp_send_port = atoi(tcp_rcv_data + 6);
+                    printf("recv port = %d \r\n", udp_send_port);
                     //UDP_ret = sendto(UDP_SOCKET, "START", 5, UDP_BroadIP, UDP_SPORT);
                     adc_run(true);
                     adc_fifo_drain();
@@ -531,7 +402,7 @@ uint16_t TCP_Server(uint8_t sn, uint16_t port)
          break;
       case SOCK_INIT :
 #ifdef TCP_S_DEBUG_
-    	 printf("%d:Listen, TCP server loopback, port [%d]\r\n", sn, port);
+    	 printf("%d:Listen, TCP server, port [%d]\r\n", sn, port);
 #endif
          if( (ret = listen(sn)) != SOCK_OK) return ret;
          break;
@@ -739,7 +610,7 @@ int32_t udps_status(uint8_t sn, uint8_t* buf, uint16_t port)
          if((ret = socket(sn, Sn_MR_UDP, port, 0x00)) != sn)
             return ret;
 #ifdef _LOOPBACK_DEBUG_
-         printf("%d:Opened, UDP loopback, port [%d]\r\n", sn, port);
+         printf("%d:Opened, UDP, port [%d]\r\n", sn, port);
 #endif
          break;
       default :
